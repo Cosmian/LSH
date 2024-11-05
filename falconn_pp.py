@@ -1,21 +1,18 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from collections import Counter
 from tqdm import tqdm
 
-
 D = 512  # Nombre de vecteurs aléatoires dans chaque famille
-L = 50   # Nombre de tables de hachage
+L = 5   # Nombre de tables de hachage
 alpha = 0.1  # Facteur de réduction pour le filtrage
 iProb = 3  # Nombre de meilleures projections à considérer pour chaque vecteur
-k = 20  # Nombre de voisins les plus proches
-qProbe = 10  # Nombre de buckets voisins sondés
+k = 1  # Nombre de voisins les plus proches
+qProbe = 3  # Nombre de buckets voisins sondés
 
-# Fonction de création des vecteurs de hachage aléatoires
+
 def creer_vecteurs_hachage(dimension, D):
     return np.random.randn(D, dimension)
 
-# Calcul du hachage pour le vecteur
+
 def calcul_hachage(vecteur, vecteurs_hachage1, vecteurs_hachage2, iProb):
     projections1 = vecteur @ vecteurs_hachage1.T
     meilleurs_indices1 = np.argsort(np.abs(projections1))[-iProb:]
@@ -32,7 +29,6 @@ def calcul_hachage(vecteur, vecteurs_hachage1, vecteurs_hachage2, iProb):
     return hachages
 
 
-# Creation de l'indexe
 def indexation(donnees, D, L, dimension, alpha, iProb):
     index = [{} for _ in range(L)]
     vecteurs_hachage1 = [creer_vecteurs_hachage(dimension, D) for _ in range(L)]
@@ -42,67 +38,61 @@ def indexation(donnees, D, L, dimension, alpha, iProb):
         for i in range(L):
             hachages = calcul_hachage(vecteur, vecteurs_hachage1[i], vecteurs_hachage2[i], iProb)
             for hachage in hachages:
+                vecteur_ref1 = vecteurs_hachage1[i][hachage[0]] * hachage[1]
+                vecteur_ref2 = vecteurs_hachage2[i][hachage[2]] * hachage[3]
+                score = max(np.dot(vecteur, vecteur_ref1), np.dot(vecteur, vecteur_ref2))
                 if hachage not in index[i]:
                     index[i][hachage] = []
-                index[i][hachage].append(vecteur)
+                index[i][hachage].append((vecteur, score))
                 
     return index, vecteurs_hachage1, vecteurs_hachage2
 
-
-
-# Fonction de filtrage des buckets
-def filtrer_buckets(index, vecteurs_hachage1, vecteurs_hachage2, k, alpha, iProb):
-    for i, table in enumerate(index):
+# Fonction de filtrage des buckets en utilisant les scores précalculés
+def filtrer_buckets(index, k, alpha, iProb):
+    for table in index:
         for hachage, bucket in table.items():
             B = len(bucket)
             if B > k:
-                taille_cible = int((B * alpha) / iProb) +1
-                vecteur_ref = vecteurs_hachage1[i][hachage[0]] * hachage[1] + vecteurs_hachage2[i][hachage[2]] * hachage[3]
-                bucket.sort(key=lambda v: np.linalg.norm(v - vecteur_ref))
+                taille_cible = int((B * alpha) / iProb)
+                # Trier le bucket selon le score en ordre décroissant
+                bucket.sort(key=lambda x: -x[1])  # x[1] est le score
                 table[hachage] = bucket[:taille_cible]
 
-# Fonction de recherche pour une liste de requêtes
 def recherche(queries, index, vecteurs_hachage1, vecteurs_hachage2, k, qProbe):
     resultats_approx = []
-    for vecteur_query in tqdm(queries,desc='recherche'):
-        candidats = set()
-        
+
+    for vecteur_query in tqdm(queries, desc='Recherche'):
+        candidats = []
         for i in range(L):
-            # Calcul des `qProbe` meilleures projections
             projections1 = vecteur_query @ vecteurs_hachage1[i].T
-            meilleurs_indices1 = np.argsort(np.abs(projections1))[-qProbe:]
-            
             projections2 = vecteur_query @ vecteurs_hachage2[i].T
-            meilleurs_indices2 = np.argsort(np.abs(projections2))[-qProbe:]
-            
-            # Ajouter les vecteurs des buckets voisins dans `candidats`
-            for indice1 in meilleurs_indices1:
+            for indice1 in np.argsort(np.abs(projections1))[-qProbe:]:
                 signe1 = int(np.sign(projections1[indice1]))
-                for indice2 in meilleurs_indices2:
+                for indice2 in np.argsort(np.abs(projections2))[-qProbe:]:
                     signe2 = int(np.sign(projections2[indice2]))
                     hachage = (indice1, signe1, indice2, signe2)
                     if hachage in index[i]:
-                        candidats.update(map(tuple, index[i][hachage]))
-        
-        # Recherche brute pour trouver les k plus proches voisins dans les candidats
-        candidats = [np.array(c) for c in candidats]
-        distances = [np.linalg.norm(v - vecteur_query) for v in candidats]
-        k_plus_proches_indices = np.argsort(distances)[:k]
-        k_plus_proches = [candidats[idx] for idx in k_plus_proches_indices]
-        
-        resultats_approx.append(k_plus_proches)
+                        # On ajoute seulement les vecteurs, en ignorant les scores :
+                        candidats.extend([vecteur for vecteur, score in index[i][hachage]])
+        if candidats:
+            k_plus_proches = sorted(candidats, key=lambda v: -np.dot(v,vecteur_query))[:k]
+            resultats_approx.append(k_plus_proches)
+        else:
+            resultats_approx.append([]) 
+
     return resultats_approx
 
-# Fonction pour calculer le taux de rappel (recall rate) pour une liste de requêtes
+
+
 def calcul_recall_rate(queries, donnees, resultats_approx, k):
     recall_rates = []
     for vecteur_query, resultat_approx in zip(queries, resultats_approx):
-        # Recherche brute sur tout l'ensemble de données pour les k plus proches voisins
+        # Recherche brute sur tout l'ensemble de données 
         distances_reelles = [np.linalg.norm(v - vecteur_query) for v in donnees]
         indices_reels = np.argsort(distances_reelles)[:k]
         vrais_k_plus_proches = [donnees[idx] for idx in indices_reels]
         
-        # Calcul du recall rate pour cette requête
+        # Calcul du recall rate 
         set_resultat_approx = set(map(tuple, resultat_approx))
         set_vrais_k_plus_proches = set(map(tuple, vrais_k_plus_proches))
         
@@ -112,7 +102,15 @@ def calcul_recall_rate(queries, donnees, resultats_approx, k):
 
     return np.mean(recall_rates)
 
+def normalise(vecteurs):
+    vecteurs_normalises = []
+    for vecteur in vecteurs:
+        norme = np.linalg.norm(vecteur)
+        vecteur_normalise = vecteur / norme  
+        vecteurs_normalises.append(vecteur_normalise)
+    return vecteurs_normalises
 
+# Chargement des données et des requêtes
 dimension = 384  # Dimension des vecteurs
 donnees = np.load('maaarco.npy')
 queries = np.load('maaarco_queries.npy')
@@ -120,11 +118,14 @@ queries = np.load('maaarco_queries.npy')
 donnees = donnees[:5000]
 queries = queries[:100]
 
+donnees = normalise(donnees)
+queries = normalise(queries)
 
+
+
+# Création de l'index et filtrage des buckets
 index, vecteurs_hachage1, vecteurs_hachage2 = indexation(donnees, D, L, dimension, alpha, iProb)
-
-
-filtrer_buckets(index, vecteurs_hachage1, vecteurs_hachage2, k, alpha, iProb)
+filtrer_buckets(index, k, alpha, iProb)
 
 resultats_approx = recherche(queries, index, vecteurs_hachage1, vecteurs_hachage2, k, qProbe)
 
