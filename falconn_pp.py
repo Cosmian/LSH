@@ -3,10 +3,10 @@ from tqdm import tqdm
 
 
 D = 384  # Nombre de vecteurs aléatoires dans chaque famille
-L = 5   # Nombre de tables de hachage
+L = 100   # Nombre de tables de hachage
 alpha = 0.1  # Facteur de réduction pour le filtrage
 iProb = 3  # Nombre de meilleures projections à considérer pour chaque vecteur
-k = 10  # Nombre de voisins les plus proches
+k = 5  # Nombre de voisins les plus proches
 qProbe = 3  # Nombre de buckets voisins sondés
 
 
@@ -41,7 +41,7 @@ def indexation(donnees, D, L, dimension, alpha, iProb):
             for hachage in hachages:
                 vecteur_ref1 = vecteurs_hachage1[i][hachage[0]] * hachage[1]
                 vecteur_ref2 = vecteurs_hachage2[i][hachage[2]] * hachage[3]
-                score = min(np.dot(vecteur, vecteur_ref1), np.dot(vecteur, vecteur_ref2))
+                score = max(np.dot(vecteur, vecteur_ref1), np.dot(vecteur, vecteur_ref2))
                 if hachage not in index[i]:
                     index[i][hachage] = []
                 index[i][hachage].append((vecteur, score))
@@ -54,7 +54,7 @@ def filtrer_buckets(index, k, alpha, iProb):
         for hachage, bucket in table.items():
             B = len(bucket)
             if B > k:
-                taille_cible = int((B * alpha) / iProb)
+                taille_cible = max(int((B * alpha) / iProb),k)
                 # Trier le bucket selon le score en ordre décroissant
                 bucket.sort(key=lambda x: -x[1])  # x[1] est le score
                 table[hachage] = bucket[:taille_cible]
@@ -80,11 +80,14 @@ def recherche(queries, index, vecteurs_hachage1, vecteurs_hachage2, k, qProbe):
                         cpt+=len(bucket)
         list.append(cpt)
         if candidats:
+            candidats = np.unique(candidats, axis=0).tolist()
             k_plus_proches = sorted(candidats, key=lambda v: -np.dot(v,vecteur_query))[:k]
             resultats_approx.append(k_plus_proches)
         else:
             resultats_approx.append([]) 
-    return resultats_approx,list
+    
+    ll= [resultats_approx,list]
+    return ll
 
 
 
@@ -100,10 +103,10 @@ def calcul_recall_rate(queries, donnees, resultats_approx, k):
         # Calcul du recall rate 
         set_resultat_approx = set(map(tuple, resultat_approx))
         set_vrais_k_plus_proches = set(map(tuple, vrais_k_plus_proches))
-
         intersection = set_resultat_approx.intersection(set_vrais_k_plus_proches)
         recall_rate = len(intersection) / k
         recall_rates.append(recall_rate)
+
 
     return np.mean(recall_rates)
 
@@ -120,24 +123,46 @@ dimension = 384  # Dimension des vecteurs
 donnees = np.load('maaarco.npy')
 queries = np.load('maaarco_queries.npy')
 
-#donnees = donnees[:50000]
-#queries = queries[:100]
+donnees = donnees[:10000]
+queries = queries[:500]
 
 donnees = normalise(donnees)
 queries = normalise(queries)
 
 
-
-# Création de l'index et filtrage des buckets
+Lrecall=[]
+Lvec=[]
+k=1
 index, vecteurs_hachage1, vecteurs_hachage2 = indexation(donnees, D, L, dimension, alpha, iProb)
 filtrer_buckets(index, k, alpha, iProb)
 
 resultats_approx = recherche(queries, index, vecteurs_hachage1, vecteurs_hachage2, k, qProbe)
 print(' nombre de vecteurs renoyés par requete : ',np.mean(resultats_approx[1]))
-
+Lvec.append(np.mean(resultats_approx[1]))
 recall_rate_moyen = calcul_recall_rate(queries, donnees, resultats_approx[0], k)
+Lrecall.append(recall_rate_moyen)
 
 print("recall rate :", recall_rate_moyen)
 
+
+
+for k in range(5,21,5):# Création de l'index et filtrage des buckets
+    print(k)
+    index, vecteurs_hachage1, vecteurs_hachage2 = indexation(donnees, D, L, dimension, alpha, iProb)
+    filtrer_buckets(index, k, alpha, iProb)
+
+    resultats_approx = recherche(queries, index, vecteurs_hachage1, vecteurs_hachage2, k, qProbe)
+    print(' nombre de vecteurs renoyés par requete : ',np.mean(resultats_approx[1]))
+    Lvec.append(np.mean(resultats_approx[1]))
+    recall_rate_moyen = calcul_recall_rate(queries, donnees, resultats_approx[0], k)
+    Lrecall.append(recall_rate_moyen)
+
+    print("recall rate :", recall_rate_moyen)
+
+print('recall:',Lrecall)
 print()
-print('D=',D,'L=',L)
+print('nombre vecteur / queries : ',Lvec)
+print()
+
+
+
